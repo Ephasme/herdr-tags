@@ -37,3 +37,27 @@ command = ["./target/release/herdr-tags", "sync"]
 [[events]]
 on = "pane.agent_detected"
 command = ["./target/release/herdr-tags", "sync"]
+
+[[actions]]
+id = "ls"
+title = "List tags"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "ls"]
+
+[[actions]]
+id = "clear"
+title = "Clear all tag tokens and release the view"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "clear"]
+
+[[actions]]
+id = "gc"
+title = "Drop tag entries for panes that are gone"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "gc"]
+
+[[actions]]
+id = "filter-clear"
+title = "Clear tag filters"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "filter-clear"]
