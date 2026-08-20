@@ -13,7 +13,7 @@ fn usage() -> &'static str {
         "  herdr-tags delete <tag>\n",
         "  herdr-tags filter <tag> <in|out|off>\n",
         "  herdr-tags filter-clear\n",
-        "  herdr-tags sync | clear | gc | paths | ui [--dock]"
+        "  herdr-tags sync | clear | gc | paths | ui [--dock] [--edit]"
     )
 }
 
@@ -55,7 +55,12 @@ fn main() -> ExitCode {
         "gc" => cmd::gc(),
         "paths" => cmd::paths(),
         "open-popup" => cmd::open_popup(),
-        "ui" => herdr_tags::ui::run(args.iter().any(|a| a == "--dock")).map(|()| String::new()),
+        "open-editor" => cmd::open_editor(),
+        "ui" => herdr_tags::ui::run(
+            args.iter().any(|a| a == "--dock"),
+            args.iter().any(|a| a == "--edit"),
+        )
+        .map(|()| String::new()),
         "help" | "--help" | "-h" => Ok(usage().to_string()),
         other => Err(format!("unknown command {other}\n{}", usage())),
     };

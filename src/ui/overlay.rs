@@ -3,6 +3,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+use crate::complete;
+use crate::layout;
+use crate::model::TagName;
+
 use super::{App, Prompt};
 
 /// Renders the active prompt as a centred bordered box over whichever view is
@@ -12,48 +16,73 @@ pub fn render(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         return;
     };
 
-    let (title, body) = match prompt {
-        Prompt::AddTag { pane_id, buffer } => (
-            format!("Add tag to {pane_id}"),
-            vec![
-                // A trailing bar shows where the next character lands; the
-                // terminal cursor is parked elsewhere by the frame.
-                Line::from(format!("{buffer}|")),
-                Line::styled(
-                    "Enter add · Backspace · Esc cancel",
-                    Style::default().add_modifier(Modifier::DIM),
-                ),
-            ],
-        ),
-        Prompt::RemoveTag { pane_id, choices, cursor } => {
-            let mut lines: Vec<Line> = choices
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let reversed = Style::default().add_modifier(Modifier::REVERSED);
+
+    let (title, body, width_percent) = match prompt {
+        Prompt::EditAgent { pane_id, buffer, tag_cursor, suggestion_cursor } => {
+            let label = app
+                .agents
                 .iter()
-                .enumerate()
-                .map(|(index, tag)| {
-                    let marker = if index == *cursor { ">" } else { " " };
-                    Line::from(Span::raw(format!("{marker} {}", tag.as_str())))
-                })
-                .collect();
-            lines.push(Line::styled(
-                "j/k move · Enter remove · Esc cancel",
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-            (format!("Remove tag from {pane_id}"), lines)
+                .find(|a| &a.pane_id == pane_id)
+                .map(|a| app.workspace_label(&a.workspace_id))
+                .unwrap_or(pane_id.as_str());
+            let title = format!("Tags — {label} ({pane_id})");
+
+            let applied: Vec<TagName> = app.store.tags_for(pane_id).into_iter().collect();
+            let suggestions = complete::suggest(&app.known, &applied, buffer);
+
+            // Break the sizing circularity: probe `centre` for the width the
+            // real box will have -- its horizontal split does not depend on
+            // height -- then decide how many suggestion slots the frame's
+            // height leaves room for, and only after that compute the real,
+            // height-dependent box rect below.
+            let width = centre(area, 70, area.height).width.saturating_sub(2);
+            let slots = layout::suggestion_slots(area.height);
+
+            let chips = layout::chips(&applied, *tag_cursor, width);
+            let chip_line = if chips.visible.is_empty() && chips.omitted == 0 {
+                Line::styled("no tags yet", dim)
+            } else {
+                let mut spans: Vec<Span> = Vec::new();
+                for (index, tag) in chips.visible.iter().enumerate() {
+                    if index > 0 {
+                        spans.push(Span::raw(" "));
+                    }
+                    let style =
+                        if chips.cursor == Some(index) { reversed } else { Style::default() };
+                    spans.push(Span::styled(format!("{} ✕", tag.as_str()), style));
+                }
+                if chips.omitted > 0 {
+                    if !chips.visible.is_empty() {
+                        spans.push(Span::raw(" "));
+                    }
+                    spans.push(Span::styled(format!("+{}", chips.omitted), dim));
+                }
+                Line::from(spans)
+            };
+
+            let mut body = vec![chip_line, Line::from(format!("add: {buffer}|"))];
+            for (index, tag) in suggestions.iter().take(slots).enumerate() {
+                let style = if index == *suggestion_cursor { reversed } else { dim };
+                body.push(Line::styled(tag.as_str().to_string(), style));
+            }
+            body.push(Line::styled("Tab complete · Enter save · ←→ ✕ Backspace · Esc close", dim));
+
+            (title, body, 70)
         }
         Prompt::ConfirmDelete { tag } => (
             "Delete tag everywhere".to_string(),
             vec![
                 Line::from(format!("delete `{}` from every agent?", tag.as_str())),
-                Line::styled(
-                    "y or Enter confirm · any other key cancels",
-                    Style::default().add_modifier(Modifier::DIM),
-                ),
+                Line::styled("y or Enter confirm · any other key cancels", dim),
             ],
+            60,
         ),
     };
 
     let height = (body.len() as u16).saturating_add(2).min(area.height);
-    let box_area = centre(area, 60, height);
+    let box_area = centre(area, width_percent, height);
 
     // `Clear` first, or the view underneath bleeds through the box.
     frame.render_widget(Clear, box_area);

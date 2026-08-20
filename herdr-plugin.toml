@@ -81,3 +81,17 @@ id = "open"
 title = "Open tags (popup)"
 contexts = ["workspace"]
 command = ["./target/release/herdr-tags", "open-popup"]
+
+[[panes]]
+id = "editor"
+title = "Tags"
+placement = "popup"
+width = "60%"
+height = "50%"
+command = ["./target/release/herdr-tags", "ui", "--edit"]
+
+[[actions]]
+id = "edit"
+title = "Edit tags on the focused agent"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "open-editor"]

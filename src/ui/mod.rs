@@ -19,11 +19,19 @@ pub enum Pane {
     Tags,
 }
 
-/// A modal text prompt (adding a tag) or a confirmation (deleting one).
+/// A modal prompt for editing an agent's tags, or a confirmation for
+/// deleting one everywhere.
 #[derive(Debug, Clone)]
 pub enum Prompt {
-    AddTag { pane_id: String, buffer: String },
-    RemoveTag { pane_id: String, choices: Vec<TagName>, cursor: usize },
+    EditAgent {
+        pane_id: String,
+        buffer: String,
+        /// `None` until the user moves onto a chip with Left/Right. Removal
+        /// requires an explicit selection, so a stray Backspace on a freshly
+        /// opened editor can never delete a tag.
+        tag_cursor: Option<usize>,
+        suggestion_cursor: usize,
+    },
     ConfirmDelete { tag: TagName },
 }
 
@@ -142,7 +150,7 @@ impl App {
 const INPUT_POLL: Duration = Duration::from_millis(200);
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
 
-pub fn run(dock: bool) -> Result<(), String> {
+pub fn run(dock: bool, edit: bool) -> Result<(), String> {
     // `ratatui::run` is generic over the closure's return type, so it takes our
     // `Result<(), String>` directly. It also installs a panic hook that restores
     // the terminal -- hand-rolled enable_raw_mode/EnterAlternateScreen would
@@ -150,6 +158,32 @@ pub fn run(dock: bool) -> Result<(), String> {
     // never run when the stack unwinds past them.
     ratatui::run(|terminal| {
         let mut app = App::new(dock)?;
+        if edit {
+            // A popup pane gets no `HERDR_PANE_ID` (see `cmd::focused_pane`'s
+            // own doc comment), so this lands on the plugin-context or
+            // focused-agent tiers -- both of which name the user's agent
+            // rather than the popup itself.
+            match crate::cmd::focused_pane() {
+                Ok(pane_id) => match app.agents.iter().position(|a| a.pane_id == pane_id) {
+                    Some(index) => {
+                        app.agent_cursor = index;
+                        app.prompt = Some(Prompt::EditAgent {
+                            pane_id,
+                            buffer: String::new(),
+                            tag_cursor: None,
+                            suggestion_cursor: 0,
+                        });
+                    }
+                    // Never silently edit a different pane: leave the
+                    // editor closed on the Agents list so the user can
+                    // pick with `a`.
+                    None => app.status = format!("{pane_id} is not an agent"),
+                },
+                // Never abort the TUI: a failed resolution still leaves a
+                // usable Agents list.
+                Err(message) => app.status = message,
+            }
+        }
         event_loop(terminal, &mut app)
     })
 }
@@ -234,7 +268,7 @@ mod footer {
         let quit = if app.dock { "q close pane" } else { "q/Esc close" };
         let keys = match app.focus {
             Pane::Agents => {
-                format!("Tab switch · a add · r remove · Enter focus · c clear · {quit}")
+                format!("Tab switch · a tags · Enter focus · c clear · {quit}")
             }
             Pane::Tags => format!("Tab switch · i in · o out · D delete · c clear · {quit}"),
         };
@@ -263,18 +297,12 @@ fn handle_key(app: &mut App, code: KeyCode) -> Result<(), String> {
             let Some(pane_id) = app.selected_agent().map(|a| a.pane_id.clone()) else {
                 return Ok(());
             };
-            app.prompt = Some(Prompt::AddTag { pane_id, buffer: String::new() });
-        }
-        KeyCode::Char('r') => {
-            let Some(pane_id) = app.selected_agent().map(|a| a.pane_id.clone()) else {
-                return Ok(());
-            };
-            let choices: Vec<TagName> = app.store.tags_for(&pane_id).into_iter().collect();
-            if choices.is_empty() {
-                app.status = "that agent has no tags".to_string();
-            } else {
-                app.prompt = Some(Prompt::RemoveTag { pane_id, choices, cursor: 0 });
-            }
+            app.prompt = Some(Prompt::EditAgent {
+                pane_id,
+                buffer: String::new(),
+                tag_cursor: None,
+                suggestion_cursor: 0,
+            });
         }
         // Gated on the Tags view on purpose: these act on `selected_tag()`,
         // which is the Tags cursor. Ungated, pressing `i` from the Agents view
@@ -314,53 +342,115 @@ fn handle_prompt_key(app: &mut App, code: KeyCode) -> Result<(), String> {
     };
 
     match prompt {
-        Prompt::AddTag { pane_id, mut buffer } => match code {
-            KeyCode::Esc => app.prompt = None,
-            KeyCode::Backspace => {
-                buffer.pop();
-                app.prompt = Some(Prompt::AddTag { pane_id, buffer });
-            }
-            KeyCode::Char(c) => {
-                buffer.push(c);
-                app.prompt = Some(Prompt::AddTag { pane_id, buffer });
-            }
-            KeyCode::Enter => {
-                // Validation only -- `cmd::add` parses again on the authoritative
-                // path. A rejected name must never close the prompt or write
-                // anything: the user typed `my tag` and needs to fix the space,
-                // not retype from scratch.
-                if let Err(message) = TagName::parse(&buffer) {
-                    app.status = message;
-                    return Ok(());
+        Prompt::EditAgent { pane_id, mut buffer, tag_cursor, mut suggestion_cursor } => {
+            let applied: Vec<TagName> = app.store.tags_for(&pane_id).into_iter().collect();
+            match code {
+                KeyCode::Esc => app.prompt = None,
+                KeyCode::Char(c) => {
+                    buffer.push(c);
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id,
+                        buffer,
+                        tag_cursor: None,
+                        suggestion_cursor: 0,
+                    });
                 }
-                app.prompt = None;
-                app.apply(move || crate::cmd::add(&buffer, Some(&pane_id)))?;
+                KeyCode::Backspace if !buffer.is_empty() => {
+                    buffer.pop();
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id,
+                        buffer,
+                        tag_cursor,
+                        suggestion_cursor: 0,
+                    });
+                }
+                KeyCode::Backspace => {
+                    let Some(i) = tag_cursor else { return Ok(()) };
+                    let Some(tag) = applied.get(i).cloned() else { return Ok(()) };
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id: pane_id.clone(),
+                        buffer,
+                        tag_cursor: None,
+                        suggestion_cursor,
+                    });
+                    app.apply(move || crate::cmd::remove(tag.as_str(), Some(&pane_id)))?;
+                }
+                KeyCode::Tab => {
+                    let suggestions = crate::complete::suggest(&app.known, &applied, &buffer);
+                    let Some(tag) = suggestions.get(suggestion_cursor) else { return Ok(()) };
+                    buffer = tag.as_str().to_string();
+                    app.prompt =
+                        Some(Prompt::EditAgent { pane_id, buffer, tag_cursor, suggestion_cursor });
+                }
+                KeyCode::Down => {
+                    let len = crate::complete::suggest(&app.known, &applied, &buffer).len();
+                    if len == 0 {
+                        return Ok(());
+                    }
+                    suggestion_cursor = (suggestion_cursor + 1).min(len - 1);
+                    app.prompt =
+                        Some(Prompt::EditAgent { pane_id, buffer, tag_cursor, suggestion_cursor });
+                }
+                KeyCode::Up => {
+                    let len = crate::complete::suggest(&app.known, &applied, &buffer).len();
+                    if len == 0 {
+                        return Ok(());
+                    }
+                    suggestion_cursor = suggestion_cursor.saturating_sub(1);
+                    app.prompt =
+                        Some(Prompt::EditAgent { pane_id, buffer, tag_cursor, suggestion_cursor });
+                }
+                KeyCode::Right if buffer.is_empty() && !applied.is_empty() => {
+                    let last = applied.len() - 1;
+                    let next = match tag_cursor {
+                        None => 0,
+                        Some(i) => (i.min(last) + 1).min(last),
+                    };
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id,
+                        buffer,
+                        tag_cursor: Some(next),
+                        suggestion_cursor,
+                    });
+                }
+                KeyCode::Left if buffer.is_empty() && !applied.is_empty() => {
+                    let last = applied.len() - 1;
+                    let next = match tag_cursor {
+                        None => last,
+                        Some(i) => i.min(last).saturating_sub(1),
+                    };
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id,
+                        buffer,
+                        tag_cursor: Some(next),
+                        suggestion_cursor,
+                    });
+                }
+                KeyCode::Enter => {
+                    // Validation only -- `cmd::add` parses again on the
+                    // authoritative path. A rejected name must never close
+                    // the prompt or write anything: the user typed `my tag`
+                    // and needs to fix the space, not retype from scratch.
+                    if let Err(message) = TagName::parse(&buffer) {
+                        app.status = message;
+                        return Ok(());
+                    }
+                    let typed = buffer;
+                    // The editor stays open -- reset to an empty buffer --
+                    // so a second tag can be added immediately. This
+                    // assignment must happen before `apply`, which borrows
+                    // `app` mutably.
+                    app.prompt = Some(Prompt::EditAgent {
+                        pane_id: pane_id.clone(),
+                        buffer: String::new(),
+                        tag_cursor: None,
+                        suggestion_cursor: 0,
+                    });
+                    app.apply(move || crate::cmd::add(&typed, Some(&pane_id)))?;
+                }
+                _ => {}
             }
-            _ => {}
-        },
-        Prompt::RemoveTag { pane_id, choices, cursor } => match code {
-            KeyCode::Esc => app.prompt = None,
-            KeyCode::Down | KeyCode::Char('j') => {
-                let next = (cursor + 1) % choices.len();
-                app.prompt = Some(Prompt::RemoveTag { pane_id, choices, cursor: next });
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let next = (cursor + choices.len() - 1) % choices.len();
-                app.prompt = Some(Prompt::RemoveTag { pane_id, choices, cursor: next });
-            }
-            KeyCode::Enter => {
-                let Some(tag) = choices.get(cursor).cloned() else {
-                    app.prompt = None;
-                    return Ok(());
-                };
-                app.prompt = None;
-                // The last-occurrence filter prune is NOT reimplemented here:
-                // `cmd::remove` owns that rule, which is the point of routing
-                // through it.
-                app.apply(move || crate::cmd::remove(tag.as_str(), Some(&pane_id)))?;
-            }
-            _ => {}
-        },
+        }
         // `y` or Enter confirms; any other key cancels, including `n`.
         Prompt::ConfirmDelete { tag } => match code {
             KeyCode::Char('y') | KeyCode::Enter => {

@@ -287,3 +287,21 @@ pub fn open_popup() -> Result<String, String> {
     // Copy mode holds the modal slot (fact 15).
     Err(format!("{bin} plugin pane open failed: {status}"))
 }
+
+/// Bindable entry point for the per-agent tag editor: identical to
+/// `open_popup` except for `--entrypoint editor`, for the same reason -- a
+/// plugin action cannot open its own pane over the socket, so it re-enters
+/// herdr through `HERDR_BIN_PATH`.
+pub fn open_editor() -> Result<String, String> {
+    let bin = std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string());
+    let status = std::process::Command::new(&bin)
+        .args(["plugin", "pane", "open", "--plugin", "tags", "--entrypoint", "editor"])
+        .status()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    if status.success() {
+        return Ok(String::new());
+    }
+    // `ui_busy` lands here: herdr refuses to open a popup while Settings or
+    // Copy mode holds the modal slot (fact 15).
+    Err(format!("{bin} plugin pane open failed: {status}"))
+}
