@@ -8,3 +8,11 @@ crossterm = "0.29"
 ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+
+[lib]
+name = "herdr_tags"
+path = "src/lib.rs"
+
+[[bin]]
+name = "herdr-tags"
+path = "src/main.rs"
