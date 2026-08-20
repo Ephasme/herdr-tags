@@ -1,0 +1,39 @@
+id = "tags"
+name = "Tags"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Tag herdr agents, and filter the Agents view by tag"
+platforms = ["macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+# Tag tokens carry no TTL and the agent view is transient, so both are lost on
+# server exit. This hook is the only thing that puts them back. It does NOT run
+# on plugin link or enable, so the first reconcile after linking is manual.
+[[startup]]
+command = ["./target/release/herdr-tags", "sync"]
+
+[[actions]]
+id = "sync"
+title = "Resync tags"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "sync"]
+
+[[actions]]
+id = "paths"
+title = "Show tags state paths"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "paths"]
+
+# A fresh pane carries no tokens, so re-stamp when one appears or an agent is
+# detected in it. pane.focused is deliberately NOT hooked: it fires constantly.
+# pane.updated is not hookable at all, which is why writing tokens here cannot
+# feed this plugin its own events.
+[[events]]
+on = "pane.created"
+command = ["./target/release/herdr-tags", "sync"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["./target/release/herdr-tags", "sync"]
