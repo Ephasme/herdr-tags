@@ -46,9 +46,8 @@ fn main() -> ExitCode {
         "clear" => cmd::clear(),
         "gc" => cmd::gc(),
         "paths" => cmd::paths(),
-        // Still a placeholder: `src/ui/` does not exist until Task 7, which
-        // replaces this arm. `usage()` already advertises it.
-        "ui" => Err("ui is implemented in Task 7".to_string()),
+        "open-popup" => cmd::open_popup(),
+        "ui" => herdr_tags::ui::run(args.iter().any(|a| a == "--dock")).map(|()| String::new()),
         other => Err(format!("unknown command {other}\n{}", usage())),
     };
 

@@ -270,3 +270,20 @@ pub fn paths() -> Result<String, String> {
         FilterState::path()?.display()
     ))
 }
+
+/// Bindable entry point for the popup: a `[[keys.command]]` can invoke a plugin
+/// action but not a plugin pane, so the action re-enters herdr to open one.
+/// `HERDR_BIN_PATH` is the portable way to find the running binary.
+pub fn open_popup() -> Result<String, String> {
+    let bin = std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string());
+    let status = std::process::Command::new(&bin)
+        .args(["plugin", "pane", "open", "--plugin", "tags", "--entrypoint", "popup"])
+        .status()
+        .map_err(|e| format!("{bin}: {e}"))?;
+    if status.success() {
+        return Ok(String::new());
+    }
+    // `ui_busy` lands here: herdr refuses to open a popup while Settings or
+    // Copy mode holds the modal slot (fact 15).
+    Err(format!("{bin} plugin pane open failed: {status}"))
+}

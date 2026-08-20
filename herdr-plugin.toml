@@ -61,3 +61,23 @@ id = "filter-clear"
 title = "Clear tag filters"
 contexts = ["workspace"]
 command = ["./target/release/herdr-tags", "filter-clear"]
+
+[[panes]]
+id = "popup"
+title = "Tags"
+placement = "popup"
+width = "70%"
+height = "70%"
+command = ["./target/release/herdr-tags", "ui"]
+
+[[panes]]
+id = "dock"
+title = "Tags"
+placement = "split"
+command = ["./target/release/herdr-tags", "ui", "--dock"]
+
+[[actions]]
+id = "open"
+title = "Open tags (popup)"
+contexts = ["workspace"]
+command = ["./target/release/herdr-tags", "open-popup"]
